@@ -1,0 +1,11 @@
+▲ Next.js 16.4.1
+- Local:         http://localhost:3000
+- Network:       http://172.16.36.117:3000
+✓ Ready in 1027ms
+✓ Running next.config.ts took 227ms
+⚠ "next start" does not work with "output: standalone" configuration. Use "node .next/standalone/server.js" instead.
+(node:4520) ExperimentalWarning: localStorage is not available because --localstorage-file was not provided.
+(Use `node --trace-warnings ...` to show where the warning was created)
+{"at":"2026-11-03T11:42:38.949Z","level":"info","event":"backup_created","file":"C:\\Projects\\Ai Histery Document\\data\\backups\\memory-2026-11-03T11-42-35-118Z.tar.gz","size":5923361}
+{"at":"2026-11-03T11:42:43.889Z","level":"warn","event":"llm_retry","provider":"gemini","purpose":"question_answering","status":503,"attempt":1}
+{"at":"2026-11-03T11:42:50.639Z","level":"warn","event":"llm_retry","provider":"gemini","purpose":"question_answering","status":503,"attempt":2}

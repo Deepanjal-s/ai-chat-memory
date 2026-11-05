@@ -1,0 +1,37 @@
+# Server deployment: PostgreSQL 17 + pgvector, and the app.
+#   1. Copy .env.example to .env and fill in APP_PASSWORD_HASH, SESSION_SECRET, POSTGRES_PASSWORD.
+#   2. docker compose up -d --build
+#   3. Put HTTPS in front (reverse proxy such as Caddy/nginx) before exposing it beyond localhost.
+services:
+  db:
+    image: pgvector/pgvector:pg17
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: memory
+      POSTGRES_USER: memory
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U memory -d memory']
+      interval: 5s
+      retries: 10
+
+  app:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://memory:${POSTGRES_PASSWORD}@db:5432/memory
+      DATA_DIR: /data
+    volumes:
+      - appdata:/data
+    ports:
+      - '127.0.0.1:3000:3000'
+
+volumes:
+  pgdata:
+  appdata:

@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "Conversation Memory capture",
+  "version": "1.0.0",
+  "description": "Saves the ChatGPT conversations you open to your private Conversation Memory app.",
+  "permissions": ["storage", "alarms"],
+  "host_permissions": ["https://chatgpt.com/*", "http://localhost/*", "http://127.0.0.1/*"],
+  "optional_host_permissions": ["https://*/*"],
+  "background": { "service_worker": "background.js" },
+  "content_scripts": [
+    {
+      "matches": ["https://chatgpt.com/*"],
+      "js": ["extract.js", "content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": { "default_title": "Conversation Memory", "default_popup": "popup.html" },
+  "options_page": "options.html"
+}
