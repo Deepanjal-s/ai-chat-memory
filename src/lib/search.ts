@@ -1,5 +1,6 @@
 import type { Db } from './db/client'
 import { record } from './ai/llm'
+import { bm25Scores } from './bm25'
 import { getEmbeddingProvider, toVectorLiteral, type EmbeddingProvider } from './indexing/embeddings'
 
 export interface SearchParams {
@@ -42,6 +43,61 @@ export interface SearchResult {
 export const MARK_START = '\u0001'
 export const MARK_END = '\u0002'
 const RRF_K = 60
+/** Messages that match at least one query term and get re-ranked with BM25. */
+const KEYWORD_CANDIDATES = 1000
+
+/**
+ * Keyword ranking. PostgreSQL selects the candidates (OR of the query terms, or the strict query when it has
+ * "-exclusions") using the GIN index; BM25 then orders them, with document frequencies counted under the same
+ * filters. This replaced ts_rank_cd + an all-terms bonus, which has no IDF and favours long messages; see
+ * src/lib/bm25.ts for the measurement.
+ */
+async function keywordSearch(
+  db: Db,
+  q: string,
+  where: string,
+  filterParams: unknown[],
+  strict: boolean,
+): Promise<{ id: number; score: number }[]> {
+  const params = [q, ...filterParams]
+  const candidates = await db.query<{ id: number; tsv: string; created_at: Date | string | null }>(
+    `WITH tq AS (
+       SELECT CASE WHEN $${filterParams.length + 2}::boolean OR websearch_to_tsquery('english', $1)::text = ''
+                   THEN websearch_to_tsquery('english', $1)
+                   ELSE replace(websearch_to_tsquery('english', $1)::text, ' & ', ' | ')::tsquery END AS q)
+     SELECT m.id, m.tsv::text AS tsv, m.created_at
+       FROM messages m, tq
+      WHERE m.tsv @@ tq.q ${where}
+      ORDER BY ts_rank_cd(m.tsv, tq.q) DESC
+      LIMIT ${KEYWORD_CANDIDATES}`,
+    [...params, strict],
+  )
+  if (!candidates.length) return []
+
+  const [corpus] = await db.query<{ n: number; avg_len: number }>(
+    `SELECT count(*)::int AS n, coalesce(avg(length(m.tsv)), 0)::float8 AS avg_len
+       FROM messages m WHERE $1::text IS NOT NULL ${where}`,
+    params,
+  )
+  const dfRows = await db.query<{ lexeme: string; df: number }>(
+    `WITH lex AS (SELECT DISTINCT unnest(tsvector_to_array(to_tsvector('english', $1))) AS lexeme)
+     SELECT lexeme, (SELECT count(*) FROM messages m WHERE m.tsv @@ quote_literal(lexeme)::tsquery ${where})::int AS df
+       FROM lex`,
+    params,
+  )
+  const lexemes = dfRows.map((r) => r.lexeme)
+  const scores = bm25Scores(candidates, lexemes, {
+    n: corpus.n,
+    avgLen: corpus.avg_len,
+    df: new Map(dfRows.map((r) => [r.lexeme, r.df])),
+  })
+  const time = (d: Date | string | null) => (d ? new Date(d).getTime() : 0)
+  return candidates
+    .map((c) => ({ id: c.id, score: scores.get(c.id) ?? 0, t: time(c.created_at) }))
+    .sort((a, b) => b.score - a.score || b.t - a.t)
+    .slice(0, 200)
+    .map(({ id, score }) => ({ id, score }))
+}
 
 /**
  * Hybrid search over every stored message. Keyword matching (PostgreSQL full-text, OR-ed terms with
@@ -73,19 +129,7 @@ export async function search(
 
   // A query with exclusions ("-term") must not be loosened to OR, or excluded terms would match.
   const strict = /(^|\s)-\S/.test(q)
-  const keyword = await db.query<{ id: number; score: number }>(
-    `WITH tq AS (
-       SELECT websearch_to_tsquery('english', $1) AS andq,
-              CASE WHEN $${filterParams.length + 2}::boolean OR websearch_to_tsquery('english', $1)::text = ''
-                   THEN websearch_to_tsquery('english', $1)
-                   ELSE replace(websearch_to_tsquery('english', $1)::text, ' & ', ' | ')::tsquery END AS orq)
-     SELECT m.id, (ts_rank_cd(m.tsv, tq.orq) + CASE WHEN m.tsv @@ tq.andq THEN 1 ELSE 0 END)::float8 AS score
-       FROM messages m, tq
-      WHERE m.tsv @@ tq.orq ${where}
-      ORDER BY score DESC, m.created_at DESC NULLS LAST
-      LIMIT 200`,
-    [q, ...filterParams, strict],
-  )
+  const keyword = await keywordSearch(db, q, where, filterParams, strict)
 
   let semantic: { message_ids: number[] }[] = []
   let semanticError: string | undefined

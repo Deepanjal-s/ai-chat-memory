@@ -11,6 +11,19 @@ day-to-day use. Design documents: [ARCHITECTURE.md](ARCHITECTURE.md) (overall de
 
 ---
 
+## Measured retrieval quality
+
+Search is benchmarked with [memory-recall-bench](https://github.com/Deepanjal-s/memory-recall-bench) on all 479 labelled
+LongMemEval_s questions (`npx tsx scripts/bench-rankings.ts`): does the message that answers a question make it into a
+4,000-token context?
+
+| Keyword ranking | Any answer message | Evidence from every answer session |
+|---|---|---|
+| PostgreSQL `ts_rank_cd` (before) | 56% | 28% |
+| **BM25 re-ranking (now)** | **85%** | **61%** |
+
+163 questions that previously lost their evidence now keep it; 8 got worse.
+
 ## How conversations get in
 
 | Source | What it covers | Effort | Notes |
@@ -40,7 +53,7 @@ exports. The extension fills the gap between exports. See CAPTURE_RESEARCH.md.
     quote is not actually in that message.
   - Records about the same project in different conversations are compared. A later statement that replaces an
     earlier one marks it **outdated**; statements that disagree are flagged as **conflicts**.
-- **Search**: keyword search across every message (all words ranked first, quotes for phrases, `-word` to exclude),
+- **Search**: keyword search across every message, ranked with BM25 (rare, telling words count more than common ones; quotes for phrases, `-word` to exclude),
   with date, author and version filters. Optional semantic search can be added.
 - **Memory assistant** (Ask)
   - Answers only from the history, citing [S1], [S2]… which link to the exact message.

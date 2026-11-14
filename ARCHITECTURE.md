@@ -93,7 +93,7 @@ retrieved with lower weight and labeled as "edited/regenerated branch".
 |---|---|---|---|
 | Backend | **Python 3.12 + FastAPI** | Best ecosystem for parsing, NLP, embeddings, DOCX/PDF generation | Node/NestJS (weaker ML ecosystem) |
 | Primary DB | **PostgreSQL 17 + pgvector** | One transactional store for raw data, knowledge graph, vectors *and* full-text. Data integrity (FKs, constraints, transactions) matters more than vector-DB niche features at this scale | Qdrant/Weaviate + Postgres (two stores to keep consistent); Neo4j (graph is modest, Postgres handles it) |
-| Keyword search | Postgres full-text (`tsvector`) or **ParadeDB `pg_search` (BM25)** | Exact names like "VK7SPORTS", error codes, and IDs are poorly served by embeddings alone | Elasticsearch/OpenSearch (another cluster to run) |
+| Keyword search | Postgres full-text (`tsvector`) for candidates, **BM25 re-ranking in `src/lib/bm25.ts`** (ParadeDB `pg_search` is the server-side alternative) | Exact names like "VK7SPORTS", error codes, and IDs are poorly served by embeddings alone | Elasticsearch/OpenSearch (another cluster to run) |
 | Raw storage | **S3-compatible object store** (MinIO self-hosted, or S3/Azure Blob) | Immutable original ZIPs, checksummed | Filesystem (fine for v1 single server) |
 | Jobs | **Postgres-backed queue** (Procrastinate) or Redis + Arq | Long imports, embedding, extraction run in the background with retries and progress | Celery (heavier) |
 | LLM | **Claude** — Sonnet 5.5 for answers/docs, Haiku 5.5 for bulk extraction, Opus 5.5 for hard synthesis; via a provider interface | Strong long-context reasoning and native citation support; Batch API for cheap bulk extraction | Local models (Llama/Qwen) for full air-gap, at a quality cost |
