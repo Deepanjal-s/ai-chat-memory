@@ -3,6 +3,10 @@ import { record } from '../ai/llm'
 import type { Db } from '../db/client'
 
 export interface EmbeddingProvider {
+  /** Recorded in external_calls when `external` is true. */
+  name: string
+  /** True when text leaves this machine (logged in external_calls); false for the local model. */
+  external: boolean
   model: string
   dim: number
   embed(texts: string[], kind: 'document' | 'query'): Promise<number[][]>
@@ -13,6 +17,8 @@ export function getEmbeddingProvider(): EmbeddingProvider | null {
     case 'voyage':
       if (!config.voyageApiKey) throw new Error('EMBEDDING_PROVIDER=voyage requires VOYAGE_API_KEY')
       return voyageProvider(config.voyageApiKey, config.embeddingModel, config.embeddingDim)
+    case 'local':
+      return localProvider(config.embeddingModel, config.embeddingDim)
     default:
       return null
   }
@@ -20,6 +26,8 @@ export function getEmbeddingProvider(): EmbeddingProvider | null {
 
 function voyageProvider(apiKey: string, model: string, dim: number): EmbeddingProvider {
   return {
+    name: 'voyage',
+    external: true,
     model,
     dim,
     async embed(texts, kind) {
@@ -31,6 +39,53 @@ function voyageProvider(apiKey: string, model: string, dim: number): EmbeddingPr
       if (!res.ok) throw new Error(`Voyage embeddings failed: ${res.status} ${await res.text()}`)
       const body = (await res.json()) as { data: { embedding: number[]; index: number }[] }
       return body.data.sort((a, b) => a.index - b.index).map((d) => d.embedding)
+    },
+  }
+}
+
+/** bge models want this instruction on queries (not on documents). */
+const BGE_QUERY_PREFIX = 'Represent this sentence for searching relevant passages: '
+
+type FeatureExtractor = (
+  texts: string[],
+  opts: { pooling: 'cls' | 'mean'; normalize: boolean },
+) => Promise<{ tolist(): number[][] }>
+const extractors = new Map<string, Promise<FeatureExtractor>>()
+
+/**
+ * Embeddings computed on this machine with transformers.js (ONNX, CPU). No API key, and no message text leaves the
+ * computer. The model (about 35 MB quantized for bge-small) is downloaded once from Hugging Face and cached.
+ * Measured on LongMemEval_s with memory-recall-bench, bge-small fused with BM25 is the safe upgrade over keyword
+ * search alone (see README, "Measured retrieval quality").
+ */
+export function localProvider(model: string, dim: number): EmbeddingProvider {
+  const isBge = /bge/i.test(model)
+  const load = () => {
+    let p = extractors.get(model)
+    if (!p) {
+      p = import('@huggingface/transformers')
+        .catch(() => {
+          throw new Error('EMBEDDING_PROVIDER=local needs the optional package: npm install @huggingface/transformers')
+        })
+        .then(({ pipeline }) => pipeline('feature-extraction', model, { dtype: 'q8' }) as unknown as Promise<FeatureExtractor>)
+      p.catch(() => extractors.delete(model)) // a failed load can be retried
+      extractors.set(model, p)
+    }
+    return p
+  }
+  return {
+    name: 'local',
+    external: false,
+    model,
+    dim,
+    async embed(texts, kind) {
+      const fe = await load()
+      const input = kind === 'query' && isBge ? texts.map((t) => BGE_QUERY_PREFIX + t) : texts
+      const vectors = (await fe(input, { pooling: isBge ? 'cls' : 'mean', normalize: true })).tolist()
+      if (vectors[0] && vectors[0].length !== dim) {
+        throw new Error(`${model} returns ${vectors[0].length}-dimension vectors but EMBEDDING_DIM is ${dim}.`)
+      }
+      return vectors
     },
   }
 }
@@ -62,9 +117,11 @@ export async function embedPendingChunks(
     let vectors: number[][]
     try {
       vectors = await provider.embed(texts, 'document')
-      await record(db, { provider: 'voyage', model: provider.model, purpose: 'embedding', chars, ok: true })
+      if (provider.external) await record(db, { provider: provider.name, model: provider.model, purpose: 'embedding', chars, ok: true })
     } catch (e) {
-      await record(db, { provider: 'voyage', model: provider.model, purpose: 'embedding', chars, ok: false, error: (e as Error).message })
+      if (provider.external) {
+        await record(db, { provider: provider.name, model: provider.model, purpose: 'embedding', chars, ok: false, error: (e as Error).message })
+      }
       throw e
     }
     await db.tx(async (q) => {

@@ -136,7 +136,9 @@ export async function search(
   if (provider) {
     try {
       const [vec] = await provider.embed([q], 'query')
-      await record(db, { provider: 'voyage', model: provider.model, purpose: 'search_query_embedding', chars: q.length, ok: true })
+      if (provider.external) {
+        await record(db, { provider: provider.name, model: provider.model, purpose: 'search_query_embedding', chars: q.length, ok: true })
+      }
       semantic = await db.query<{ message_ids: number[] }>(
         `SELECT ch.message_ids FROM chunks ch
           WHERE ch.embedding IS NOT NULL

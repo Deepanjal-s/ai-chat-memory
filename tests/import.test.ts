@@ -213,6 +213,8 @@ describe('search', () => {
     // Deterministic toy embedder: dimension i = presence of a keyword.
     const vocab = ['database', 'postgresql', 'schema', 'marketing', 'cricket', 'campaign', 'coaching', 'schools']
     const provider: EmbeddingProvider = {
+      name: 'toy',
+      external: true,
       model: 'toy',
       dim: 8,
       async embed(texts) {
@@ -223,5 +225,23 @@ describe('search', () => {
     const r = await search(db, { q: 'promotion campaign for coaching' }, provider)
     expect(r.hits[0].conversationTitle).toBe('Q2 marketing ideas')
     expect(r.hits.some((h) => h.matchedBy.includes('semantic'))).toBe(true)
+  })
+
+  it('logs external embedding calls but not on-device ones', async () => {
+    const calls = async () => (await db.query<{ n: number }>('SELECT count(*)::int AS n FROM external_calls'))[0].n
+    const toy = (external: boolean): EmbeddingProvider => ({
+      name: external ? 'remote-toy' : 'local',
+      external,
+      model: 'toy',
+      dim: 8,
+      async embed(texts) {
+        return texts.map(() => [1, 0, 0, 0, 0, 0, 0, 0])
+      },
+    })
+    const before = await calls()
+    await search(db, { q: 'cricket' }, toy(false))
+    expect(await calls()).toBe(before)
+    await search(db, { q: 'cricket' }, toy(true))
+    expect(await calls()).toBe(before + 1)
   })
 })

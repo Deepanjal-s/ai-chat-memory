@@ -2,12 +2,13 @@
  * Produces a rankings file for memory-recall-bench (https://github.com/Deepanjal-s/memory-recall-bench),
  * so this app's real retrieval can be measured on LongMemEval.
  *
- *   npx tsx scripts/bench-rankings.ts convs.jsonl rankings.json [--limit N]
+ *   npx tsx scripts/bench-rankings.ts convs.jsonl rankings.json [--limit N] [--embed]
  *
  * For each benchmark conversation: a fresh in-memory database, each session imported as one ChatGPT
  * conversation through the normal import pipeline, then the question run through the app's own `search()`.
  * Output: { "<conversation id>": ["<message id>", ...best first...] }.
- * Keyword search only (no embedding provider is configured offline).
+ * Keyword search only by default. With --embed, chunks are also embedded with the on-device provider
+ * (EMBEDDING_PROVIDER=local, bge-small) and search runs as the app does with semantic search enabled.
  */
 import crypto from 'node:crypto'
 import fs from 'node:fs'
@@ -15,6 +16,7 @@ import os from 'node:os'
 import path from 'node:path'
 import readline from 'node:readline'
 import { openDb } from '../src/lib/db/client'
+import { embedPendingChunks, localProvider, type EmbeddingProvider } from '../src/lib/indexing/embeddings'
 import { registerUpload, runImport } from '../src/lib/importer/import'
 import { search } from '../src/lib/search'
 
@@ -56,8 +58,8 @@ function toChatGpt(session: { id: string; messages: BenchMessage[] }, index: num
   }
 }
 
-async function rank(conv: BenchConversation, workDir: string): Promise<string[]> {
-  const db = await openDb({ embeddingDim: 8 })
+async function rank(conv: BenchConversation, workDir: string, provider: EmbeddingProvider | null): Promise<string[]> {
+  const db = await openDb({ embeddingDim: provider?.dim ?? 8 })
   try {
     const file = path.join(workDir, `${crypto.randomUUID()}.json`)
     const body = JSON.stringify(conv.sessions.map(toChatGpt))
@@ -72,7 +74,9 @@ async function rank(conv: BenchConversation, workDir: string): Promise<string[]>
       origin: 'cli',
     })
     await runImport(db, batchId)
-    const { hits } = await search(db, { q: conv.question, limit: 200 }, null)
+    if (provider) await embedPendingChunks(db, provider, { batchSize: 32 })
+    const { hits, semanticError } = await search(db, { q: conv.question, limit: 200 }, provider)
+    if (semanticError) throw new Error(`semantic search failed: ${semanticError}`)
     if (!hits.length) return []
     const rows = await db.query<{ id: number; node_external_id: string }>(
       'SELECT id, node_external_id FROM messages WHERE id = ANY($1::int[])',
@@ -89,8 +93,9 @@ async function main() {
   const [input, output] = process.argv.slice(2).filter((a) => !a.startsWith('--'))
   const li = process.argv.indexOf('--limit')
   const limit = li >= 0 ? Number(process.argv[li + 1]) : Infinity
+  const provider = process.argv.includes('--embed') ? localProvider('Xenova/bge-small-en-v1.5', 384) : null
   if (!input || !output) {
-    console.error('Usage: npx tsx scripts/bench-rankings.ts convs.jsonl rankings.json [--limit N]')
+    console.error('Usage: npx tsx scripts/bench-rankings.ts convs.jsonl rankings.json [--limit N] [--embed]')
     process.exit(1)
   }
   const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aim-bench-'))
@@ -113,9 +118,9 @@ async function main() {
         throw new Error(`Line ${lineNo} of ${input} is not valid JSON (was it written with raw U+2028 characters?): ${e}`)
       }
       if (conv.id in rankings) continue
-      rankings[conv.id] = await rank(conv, workDir)
+      rankings[conv.id] = await rank(conv, workDir, provider)
       const n = Object.keys(rankings).length
-      if (n % 10 === 0) {
+      if (n % (provider ? 1 : 10) === 0) {
         fs.writeFileSync(output, JSON.stringify(rankings)) // checkpoint: a crash keeps finished work
         console.error(`${n} conversations (${((Date.now() - started) / 1000).toFixed(0)}s)`)
       }

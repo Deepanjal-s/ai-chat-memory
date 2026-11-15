@@ -32,13 +32,14 @@ export const config = {
     return Number(env('SESSION_TTL_HOURS', '12'))
   },
   get embeddingProvider() {
-    return env('EMBEDDING_PROVIDER', 'none') as 'none' | 'voyage'
+    return env('EMBEDDING_PROVIDER', 'none') as 'none' | 'voyage' | 'local'
   },
+  /** Defaults follow the provider: voyage-3.5 (1024) for Voyage, bge-small-en-v1.5 (384) on this machine. */
   get embeddingModel() {
-    return env('EMBEDDING_MODEL', 'voyage-3.5')
+    return env('EMBEDDING_MODEL', this.embeddingProvider === 'local' ? 'Xenova/bge-small-en-v1.5' : 'voyage-3.5')
   },
   get embeddingDim() {
-    return Number(env('EMBEDDING_DIM', '1024'))
+    return Number(env('EMBEDDING_DIM', this.embeddingProvider === 'local' ? '384' : '1024'))
   },
   get voyageApiKey() {
     return env('VOYAGE_API_KEY')

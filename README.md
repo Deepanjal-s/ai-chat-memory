@@ -24,6 +24,19 @@ LongMemEval_s questions (`npx tsx scripts/bench-rankings.ts`): does the message 
 
 163 questions that previously lost their evidence now keep it; 8 got worse.
 
+**Semantic search on this computer** (`EMBEDDING_PROVIDER=local`, bge-small fused with BM25), measured on the two
+question types where keyword search is weakest (all 30 preference questions and 30 random multi-session ones;
+about 75 s per question on a laptop CPU, `--embed`):
+
+| 4,000-token context | Keyword only | Keyword + local embeddings |
+|---|---|---|
+| Preference ("can you recommend…") | 60% | **77%** |
+| Multi-session, evidence from every session | 30% | 30% |
+
+Per question: 8 fixed, 3 broken (4k, all evidence). A real but modest gain, smaller than the benchmark's own
+message-level retriever shows (47% → 80% on preference), most likely because the app embeds whole turns of up to
+4,000 characters and bge-small only reads the first ~2,000. n = 60, so treat these as indicative.
+
 ## How conversations get in
 
 | Source | What it covers | Effort | Notes |
@@ -54,7 +67,8 @@ exports. The extension fills the gap between exports. See CAPTURE_RESEARCH.md.
   - Records about the same project in different conversations are compared. A later statement that replaces an
     earlier one marks it **outdated**; statements that disagree are flagged as **conflicts**.
 - **Search**: keyword search across every message, ranked with BM25 (rare, telling words count more than common ones; quotes for phrases, `-word` to exclude),
-  with date, author and version filters. Optional semantic search can be added.
+  with date, author and version filters. Optional semantic search, either on this computer (`EMBEDDING_PROVIDER=local`,
+  free, nothing leaves the machine) or with Voyage AI, is fused with the keyword results.
 - **Memory assistant** (Ask)
   - Answers only from the history, citing [S1], [S2]… which link to the exact message.
   - It separates confirmed decisions from suggestions, prefers current information over outdated, reports conflicts,
