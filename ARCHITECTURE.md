@@ -171,7 +171,8 @@ Key integrity rules enforced in the schema:
 
 - **Chunking** respects message boundaries: a chunk is one message, or a window of consecutive
   turns (user question + assistant answer kept together), split further only for very long
-  messages (~800 tokens, with overlap). Code blocks are never split mid-block.
+  messages (1,500 characters, about 375 tokens, with overlap, so a unit fits the ~512-token window
+  of small local embedders like bge-small). Code blocks are never split mid-block.
 - Each chunk gets a **context header** prepended before embedding:
   `Conversation: "<title>" · <date> · Project(s): <entities> · Turn 12 of 40`. This
   "contextual retrieval" technique materially improves recall for short or ambiguous messages.

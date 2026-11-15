@@ -11,9 +11,13 @@ export interface Chunk {
   text: string
 }
 
-/** ~1,000 tokens. Character budget keeps the chunker model-agnostic. */
-const MAX_CHARS = 4000
-const OVERLAP_CHARS = 400
+/**
+ * ~375 tokens. Small local embedders read only the first ~512 tokens of a unit (bge-small truncates there),
+ * so a 4,000-char unit had most of its text ignored. 1,500 chars plus the context header fits that window.
+ * A character budget keeps the chunker model-agnostic.
+ */
+export const MAX_CHARS = 1500
+const OVERLAP_CHARS = 200
 
 const ROLE_LABEL: Record<string, string> = { user: 'User', assistant: 'Assistant', tool: 'Tool' }
 
@@ -73,7 +77,8 @@ export function splitLongText(text: string, max = MAX_CHARS, overlap = OVERLAP_C
   for (const b of blocks.flatMap((b) => (b.length > max ? hardSplit(b, max) : [b]))) {
     if (cur && cur.length + b.length + 2 > max) {
       pieces.push(cur)
-      cur = cur.slice(-overlap) + '\n\n' + b
+      // Carry the overlap only when it still fits, so no piece exceeds the embedder window.
+      cur = b.length + overlap + 2 <= max ? cur.slice(-overlap) + '\n\n' + b : b
     } else cur = cur ? cur + '\n\n' + b : b
   }
   if (cur) pieces.push(cur)

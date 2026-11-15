@@ -26,16 +26,21 @@ LongMemEval_s questions (`npx tsx scripts/bench-rankings.ts`): does the message 
 
 **Semantic search on this computer** (`EMBEDDING_PROVIDER=local`, bge-small fused with BM25), measured on the two
 question types where keyword search is weakest (all 30 preference questions and 30 random multi-session ones;
-about 75 s per question on a laptop CPU, `--embed`):
+about 75 s per question on a laptop CPU, roughly twice that with 1,500-character units, `--embed`):
 
-| 4,000-token context | Keyword only | Keyword + local embeddings |
-|---|---|---|
-| Preference ("can you recommend…") | 60% | **77%** |
-| Multi-session, evidence from every session | 30% | 30% |
+| 4,000-token context | Keyword only | + embeddings, 4,000-char chunks | **+ embeddings, 1,500-char chunks (now)** |
+|---|---|---|---|
+| Preference ("can you recommend…") | 60% | 77% | **83%** |
+| Multi-session, evidence from every session | 30% | 30% | **40%** |
 
-Per question: 8 fixed, 3 broken (4k, all evidence). A real but modest gain, smaller than the benchmark's own
-message-level retriever shows (47% → 80% on preference), most likely because the app embeds whole turns of up to
-4,000 characters and bge-small only reads the first ~2,000. n = 60, so treat these as indicative.
+With a 16,000-token context, multi-session (all evidence) goes 70% → 73% → **87%**, and preference 80% → 90% → **93%**.
+
+Embedding units are now at most 1,500 characters, because bge-small reads only its first ~512 tokens: with 4,000-character
+units most of each one was ignored. Against the 4,000-character version: 7 questions fixed, 2 broken (4k, all evidence);
+against keyword only: 11 fixed, 1 broken. n = 60, so treat these as indicative.
+
+An existing database keeps its old units until conversations are re-imported; `npm run embed -- --rechunk` rebuilds and
+re-embeds them all at once.
 
 ## How conversations get in
 
