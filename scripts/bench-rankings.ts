@@ -10,84 +10,12 @@
  * Keyword search only by default. With --embed, chunks are also embedded with the on-device provider
  * (EMBEDDING_PROVIDER=local, bge-small) and search runs as the app does with semantic search enabled.
  */
-import crypto from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import readline from 'node:readline'
-import { openDb } from '../src/lib/db/client'
-import { embedPendingChunks, localProvider, type EmbeddingProvider } from '../src/lib/indexing/embeddings'
-import { registerUpload, runImport } from '../src/lib/importer/import'
-import { search } from '../src/lib/search'
-
-interface BenchMessage { id: string; role: string; content: string }
-interface BenchConversation { id: string; question: string; sessions: { id: string; messages: BenchMessage[] }[] }
-
-/** One session → one conversation in the exact shape of ChatGPT's conversations.json (a linear thread). */
-function toChatGpt(session: { id: string; messages: BenchMessage[] }, index: number) {
-  const base = 1_700_000_000 + index * 86_400
-  const mapping: Record<string, unknown> = { root: { id: 'root', parent: null, children: [] as string[], message: null } }
-  let parent = 'root'
-  session.messages.forEach((m, i) => {
-    mapping[m.id] = {
-      id: m.id,
-      parent,
-      children: [],
-      message: {
-        id: m.id,
-        author: { role: m.role === 'assistant' ? 'assistant' : 'user', name: null, metadata: {} },
-        create_time: base + i * 30,
-        content: { content_type: 'text', parts: [m.content] },
-        metadata: {},
-        recipient: 'all',
-      },
-    }
-    ;(mapping[parent] as { children: string[] }).children.push(m.id)
-    parent = m.id
-  })
-  return {
-    title: `Session ${session.id}`,
-    create_time: base,
-    update_time: base + session.messages.length * 30,
-    mapping,
-    current_node: parent,
-    conversation_id: `bench-${session.id}`,
-    id: `bench-${session.id}`,
-    is_archived: false,
-    moderation_results: [],
-  }
-}
-
-async function rank(conv: BenchConversation, workDir: string, provider: EmbeddingProvider | null): Promise<string[]> {
-  const db = await openDb({ embeddingDim: provider?.dim ?? 8 })
-  try {
-    const file = path.join(workDir, `${crypto.randomUUID()}.json`)
-    const body = JSON.stringify(conv.sessions.map(toChatGpt))
-    fs.writeFileSync(file, body)
-    const { batchId } = await registerUpload(db, {
-      tempPath: file,
-      originalFilename: 'conversations.json',
-      sha256: crypto.createHash('sha256').update(body).digest('hex'),
-      size: Buffer.byteLength(body),
-      sourceLabel: 'bench',
-      rawDir: path.join(workDir, 'raw'),
-      origin: 'cli',
-    })
-    await runImport(db, batchId)
-    if (provider) await embedPendingChunks(db, provider, { batchSize: 32 })
-    const { hits, semanticError } = await search(db, { q: conv.question, limit: 200 }, provider)
-    if (semanticError) throw new Error(`semantic search failed: ${semanticError}`)
-    if (!hits.length) return []
-    const rows = await db.query<{ id: number; node_external_id: string }>(
-      'SELECT id, node_external_id FROM messages WHERE id = ANY($1::int[])',
-      [hits.map((h) => h.messageId)],
-    )
-    const ext = new Map(rows.map((r) => [r.id, r.node_external_id]))
-    return hits.map((h) => ext.get(h.messageId)).filter((x): x is string => !!x)
-  } finally {
-    await db.close()
-  }
-}
+import { rankConversation, type BenchConversation } from '../src/lib/bench'
+import { localProvider } from '../src/lib/indexing/embeddings'
 
 async function main() {
   const [input, output] = process.argv.slice(2).filter((a) => !a.startsWith('--'))
@@ -118,7 +46,7 @@ async function main() {
         throw new Error(`Line ${lineNo} of ${input} is not valid JSON (was it written with raw U+2028 characters?): ${e}`)
       }
       if (conv.id in rankings) continue
-      rankings[conv.id] = await rank(conv, workDir, provider)
+      rankings[conv.id] = await rankConversation(conv, workDir, provider)
       const n = Object.keys(rankings).length
       if (n % (provider ? 1 : 10) === 0) {
         fs.writeFileSync(output, JSON.stringify(rankings)) // checkpoint: a crash keeps finished work

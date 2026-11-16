@@ -42,6 +42,11 @@ against keyword only: 11 fixed, 1 broken. n = 60, so treat these as indicative.
 An existing database keeps its old units until conversations are re-imported; `npm run embed -- --rechunk` rebuilds and
 re-embeds them all at once.
 
+**Regression check in CI.** `tests/retrieval.test.ts` runs 36 LongMemEval questions (6 per question type, evidence
+sessions plus 8 distractor sessions each, built by `bench/make_fixture.py`) through the real import and keyword
+search on every push. Now: 89% any answer message and 78% from every session at 4,000 tokens (newest-messages-first
+gets 36% and 17%). The test fails if either number drops by more than one question.
+
 ## How conversations get in
 
 | Source | What it covers | Effort | Notes |
@@ -206,9 +211,9 @@ On a server, exports are dropped into the `/data/inbox` volume rather than a Dow
 npm test
 ```
 
-There are 49 tests:
+There are 58 tests:
 
-- Importer, reconciliation and search.
+- Importer, reconciliation and search, plus the retrieval regression check on LongMemEval.
 - The Gemini provider (simulated API: retries, blocked and truncated responses, key kept out of URLs).
 - Knowledge extraction, quote verification, entity resolution and change detection.
 - Live-capture merging and export reconciliation.
